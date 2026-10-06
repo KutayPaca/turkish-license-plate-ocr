@@ -1,0 +1,231 @@
+Global:
+  model_name: en_PP-OCRv4_mobile_rec
+  debug: false
+  use_gpu: true
+  
+  # ÖNCESİ: epoch_num: 50
+  # SONRASI: Fine-tuning (transfer learning) yaptığımız için 40 epoch yeterli olacaktır.
+  epoch_num: 3
+  
+  log_smooth_window: 20
+  print_batch_step: 10
+  save_model_dir: ./output/rec_ppocr_v4
+  save_epoch_step: 1
+  eval_batch_step:
+  - 1000
+  - 1000
+  cal_metric_during_train: true
+  
+  # ÖNCESİ: pretrained_model: null
+  # SONRASI: Sıfırdan eğitmek yerine, indirdiğimiz İngilizce modelin ağırlıklarını verdik.
+  pretrained_model: ./pretrain_models/en_PP-OCRv4_rec_train/best_accuracy
+  
+  checkpoints: null
+  save_inference_dir: null
+  use_visualdl: false
+  infer_img: doc/imgs_words/ch/word_1.jpg
+  
+  # ÖNCESİ: character_dict_path: ppocr/utils/en_dict.txt
+  # SONRASI: Modelin sadece Türk plakalarındaki harf/rakamları öğrenmesi için kendi dosyamızı ekledik.
+  character_dict_path: ./plate_dict.txt
+  
+  # ÖNCESİ: max_text_length: 25
+  # SONRASI: Bir plakada maksimum 11-12 karakter olur (boşluklar dahil). Bellek tasarrufu için düşürdük.
+  max_text_length: 12
+  
+  infer_mode: false
+  use_space_char: true
+  distributed: true
+  
+  # ÖNCESİ: save_res_path: ./output/rec/predicts_ppocrv3.txt
+  # SONRASI: Karışmaması için çıktı dosyasının adını plaka projemize göre güncelledik.
+  save_res_path: ./output/rec/predicts_ppocrv4_plate.txt
+
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    
+    # ÖNCESİ: learning_rate: 0.0005
+    # SONRASI: Önceden eğitilmiş modelin hafızasını bozmamak (fine-tuning) için öğrenme oranını (LR) düşürdük.
+    learning_rate: 0.0001
+    
+    warmup_epoch: 0
+  regularizer:
+    name: L2
+    factor: 3.0e-05
+
+Architecture:
+  model_type: rec
+  algorithm: SVTR_LCNet
+  Transform: null
+  Backbone:
+    name: PPLCNetV3
+    scale: 0.95
+  Head:
+    name: MultiHead
+    head_list:
+    - CTCHead:
+        Neck:
+          name: svtr
+          dims: 120
+          depth: 2
+          hidden_dims: 120
+          kernel_size:
+          - 1
+          - 3
+          use_guide: true
+        Head:
+          fc_decay: 1.0e-05
+    - NRTRHead:
+        nrtr_dim: 384
+        
+        # ÖNCESİ: max_text_length: 25
+        # SONRASI: Global ayardaki gibi buradaki ağ yapısının sınırını da plaka uzunluğuna (12) çektik.
+        max_text_length: 12
+
+Loss:
+  name: MultiLoss
+  loss_config_list:
+  - CTCLoss: null
+  - NRTRLoss: null
+PostProcess:
+  name: CTCLabelDecode
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  ignore_space: false
+
+Train:
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: false
+    
+    # ÖNCESİ: data_dir: ./train_data/
+    # SONRASI: Resim klasörlerimiz ve listelerimiz PaddleOCR ana dizininde olduğu için kök dizini (./) gösterdik.
+    data_dir: ./
+    
+    ext_op_transform_idx: 1
+    
+    # ÖNCESİ: - ./train_data/train_list.txt
+    # SONRASI: Kendi oluşturduğumuz eğitim (train) listesinin yolunu verdik.
+    label_file_list:
+    - ./train_list.txt
+    
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - RecConAug:
+        prob: 0.5
+        ext_data_num: 2
+        image_shape:
+        - 48
+        - 320
+        - 3
+        
+        # ÖNCESİ: max_text_length: 25
+        # SONRASI: Augmentation (veri çoğaltma) sınırı da 12 yapıldı.
+        max_text_length: 12
+        
+    - RecAug: null
+    
+    # ÖNCESİ: (Bu satırlar yoktu)
+    # SONRASI: Veri çoğaltma (Data Augmentation) için rastgele parlaklık, kontrast ve doygunluk eklendi.
+    - ColorJitter:
+        brightness: 0.4
+        contrast: 0.4
+        saturation: 0.4
+        
+    - MultiLabelEncode:
+        gtc_encode: NRTRLabelEncode
+    - KeepKeys:
+        keep_keys:
+        - image
+        - label_ctc
+        - label_gtc
+        - length
+        - valid_ratio
+  sampler:
+    name: MultiScaleSampler
+    scales:
+    - - 320
+      - 32
+    - - 320
+      - 48
+    - - 320
+      - 64
+      
+    # ÖNCESİ: first_bs: 96
+    # SONRASI: RTX 3050 Ti'nin 4GB VRAM'ini aşmamak için 64'e ardından 16'ya düşürüldü.
+    first_bs: 16
+    
+    fix_bs: false
+    divided_factor:
+    - 8
+    - 16
+    is_training: true
+  loader:
+    shuffle: true
+    
+    # ÖNCESİ: batch_size_per_card: 96
+    # SONRASI: Ekran kartı belleği hatası (OOM) almamak için 64'e ardından 16'ya düşürüldü.
+    batch_size_per_card: 16
+    
+    # ÖNCESİ: use_shared_memory: true
+    # SONRASI: Windows'ta shared memory kullanımı sorunlara neden olabilir, bu yüzden false yapıldı.
+    use_shared_memory: false
+    drop_last: true
+    
+    # ÖNCESİ: num_workers: 8
+    # SONRASI: Windows'ta multiprocessing (çoklu işlem) kilitlenmelerini önlemek için 0 yapıldı (veri ana işlemcide yüklenir).
+    num_workers: 0
+    use_shared_memory: false
+
+Eval:
+  dataset:
+    name: SimpleDataSet
+    
+    # ÖNCESİ: data_dir: ./train_data
+    # SONRASI: Kök dizin (./) gösterildi.
+    data_dir: ./
+    
+    # ÖNCESİ: - ./train_data/val_list.txt
+    # SONRASI: Doğrulama (validation) setimiz eklendi.
+    label_file_list:
+    - ./val_list.txt
+    
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - MultiLabelEncode:
+        gtc_encode: NRTRLabelEncode
+    - RecResizeImg:
+        image_shape:
+        - 3
+        - 48
+        - 320
+    - KeepKeys:
+        keep_keys:
+        - image
+        - label_ctc
+        - label_gtc
+        - length
+        - valid_ratio
+  loader:
+    shuffle: false
+    drop_last: false
+
+    # ÖNCESİ: batch_size_per_card: 128
+    # SONRASI: RTX 3050 Ti 4GB VRAM için 64'e ardından 16'ya düşürüldü.
+    batch_size_per_card: 16
+    
+    # ÖNCESİ: num_workers: 4
+    # SONRASI: Windows işletim sisteminde donmaları önlemek için 0 yapıldı.
+    num_workers: 0
+    use_shared_memory: false
+
+profiler_options: null
